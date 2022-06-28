@@ -34,8 +34,8 @@ import os
 import shutil
 
 def run(command):
-  if os.system('%s' % (command)):
-    raise RuntimeError('    FAILED: %s' % (command))
+  if os.system(f'{command}'):
+    raise RuntimeError(f'    FAILED: {command}')
 
 def ensure_checkout_is_clean():
   # Make sure no local mods:
@@ -88,9 +88,8 @@ def process_file(file_path, line_callback):
 def find_release_version():
   with open('pom.xml', encoding='utf-8') as file:
     for line in file:
-      match = re.search(r'<version>(.+)-SNAPSHOT</version>', line)
-      if match:
-        return match.group(1)
+      if match := re.search(r'<version>(.+)-SNAPSHOT</version>', line):
+        return match[1]
     raise RuntimeError('Could not find release version in branch')
 
 # Stages the given files for the next git commit
@@ -98,7 +97,7 @@ def add_pending_files(*files):
   for file in files:
     if file:
       # print("Adding file: %s" % (file))
-      run('git add %s' % (file))
+      run(f'git add {file}')
 
 # Updates documentation feature flags
 def commit_feature_flags(release):
@@ -123,17 +122,17 @@ def update_reference_docs(release_version, path='docs'):
 if __name__ == "__main__":
   release_version = find_release_version()
 
-  print('*** Preparing release version documentation: [%s]' % release_version)
+  print(f'*** Preparing release version documentation: [{release_version}]')
 
   ensure_checkout_is_clean()
 
-  pending_files = update_reference_docs(release_version)
-  
-  if pending_files:
+  if pending_files := update_reference_docs(release_version):
     add_pending_files(*pending_files) # expects var args use * to expand
     commit_feature_flags(release_version)
   else:
-    print('WARNING: no documentation references updates for release %s' % (release_version))
+    print(
+        f'WARNING: no documentation references updates for release {release_version}'
+    )
 
   print('*** Done.')
 

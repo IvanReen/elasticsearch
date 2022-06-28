@@ -38,7 +38,7 @@ def java_exe():
   return 'export JAVA_HOME="%s" PATH="%s/bin:$PATH" JAVACMD="%s/bin/java"' % (path, path, path)
 
 def verify_java_version(version):
-  s = os.popen('%s; java -version 2>&1' % java_exe()).read()
+  s = os.popen(f'{java_exe()}; java -version 2>&1').read()
   if ' version "%s.' % version not in s:
     raise RuntimeError('got wrong version for java %s:\n%s' % (version, s))
 
@@ -47,7 +47,9 @@ def read_fully(file):
      return f.read()
 
 def wait_for_node_startup(es_dir, timeout=60, headers={}):
-  print('     Waiting until node becomes available for at most %s seconds' % timeout)
+  print(
+      f'     Waiting until node becomes available for at most {timeout} seconds'
+  )
   for _ in range(timeout):
     conn = None
     try:
@@ -67,19 +69,18 @@ def wait_for_node_startup(es_dir, timeout=60, headers={}):
   return False
 
 def download_release(version, release_hash, url):
-  print('Downloading release %s from %s' % (version, url))
+  print(f'Downloading release {version} from {url}')
   tmp_dir = tempfile.mkdtemp()
   try:
-    downloaded_files = []
     print('  ' + '*' * 80)
-    print('  Downloading %s' % (url))
-    file = ('elasticsearch-%s.zip' % version)
+    print(f'  Downloading {url}')
+    file = f'elasticsearch-{version}.zip'
     artifact_path = os.path.join(tmp_dir, file)
-    downloaded_files.append(artifact_path)
+    downloaded_files = [artifact_path]
     urllib.request.urlretrieve(url, os.path.join(tmp_dir, file))
     print('  ' + '*' * 80)
     print()
-    
+
     smoke_test_release(version, downloaded_files, release_hash)
     print('  SUCCESS')
   finally:
@@ -91,28 +92,31 @@ def get_host_from_ports_file(es_dir):
 def smoke_test_release(release, files, release_hash):
   for release_file in files:
     if not os.path.isfile(release_file):
-      raise RuntimeError('Smoketest failed missing file %s' % (release_file))
+      raise RuntimeError(f'Smoketest failed missing file {release_file}')
     tmp_dir = tempfile.mkdtemp()
-    run('unzip %s -d %s' % (release_file, tmp_dir))
-    
-    es_dir = os.path.join(tmp_dir, 'elasticsearch-%s' % (release))
+    run(f'unzip {release_file} -d {tmp_dir}')
+
+    es_dir = os.path.join(tmp_dir, f'elasticsearch-{release}')
     es_run_path = os.path.join(es_dir, 'bin/elasticsearch')
-    
-    print('  Smoke testing package [%s]' % release_file)
+
+    print(f'  Smoke testing package [{release_file}]')
     es_plugin_path = os.path.join(es_dir, 'bin/elasticsearch-plugin')
-    
+
     print('     Install xpack [%s]')
     run('%s; ES_JAVA_OPTS="-Des.plugins.staging=%s" %s install -b x-pack' % (java_exe(), release_hash, es_plugin_path))
-    headers = { 'Authorization' : 'Basic %s' % base64.b64encode(b"es_admin:foobar").decode("UTF-8") }
+    headers = {
+        'Authorization':
+        f'Basic {base64.b64encode(b"es_admin:foobar").decode("UTF-8")}'
+    }
     es_shield_path = os.path.join(es_dir, 'bin/x-pack/users')
-    
+
     print("     Install dummy shield user")
-    run('%s; %s  useradd es_admin -r superuser -p foobar' % (java_exe(), es_shield_path))
-    
-    print('  Starting elasticsearch daemon from [%s]' % es_dir)
+    run(f'{java_exe()}; {es_shield_path}  useradd es_admin -r superuser -p foobar')
+
+    print(f'  Starting elasticsearch daemon from [{es_dir}]')
     try:
-      run('%s; %s -Enode.name=smoke_tester -Ecluster.name=prepare_release -Erepositories.url.allowed_urls=http://snapshot.test* %s -Epidfile=%s -Enode.portsfile=true'
-          % (java_exe(), es_run_path, '-d', os.path.join(es_dir, 'es-smoke.pid')))
+      run(f"{java_exe()}; {es_run_path} -Enode.name=smoke_tester -Ecluster.name=prepare_release -Erepositories.url.allowed_urls=http://snapshot.test* -d -Epidfile={os.path.join(es_dir, 'es-smoke.pid')} -Enode.portsfile=true"
+          )
       if not wait_for_node_startup(es_dir, headers=headers):
         print("elasticsearch logs:")
         print('*' * 80)
@@ -123,36 +127,42 @@ def smoke_test_release(release, files, release_hash):
       try: # we now get / and /_nodes to fetch basic infos like hashes etc and the installed plugins
         host = get_host_from_ports_file(es_dir)
         conn = HTTPConnection(host, timeout=20)
-        
+
         # check if plugin is loaded
         conn.request('GET', '/_nodes/plugins?pretty=true', headers=headers)
         res = conn.getresponse()
-        if res.status == 200:
-          nodes = json.loads(res.read().decode("utf-8"))['nodes']
-          for _, node in nodes.items():
-            node_plugins = node['plugins']
-            for node_plugin in node_plugins:
-              if node_plugin['name'] != 'x-pack':
-                raise RuntimeError('Unexpected plugin %s, expected x-pack only' % node_plugin['name'])
-        else:
-          raise RuntimeError('Expected HTTP 200 but got %s' % res.status)
+        if res.status != 200:
+          raise RuntimeError(f'Expected HTTP 200 but got {res.status}')
 
+        nodes = json.loads(res.read().decode("utf-8"))['nodes']
+        for _, node in nodes.items():
+          node_plugins = node['plugins']
+          for node_plugin in node_plugins:
+            if node_plugin['name'] != 'x-pack':
+              raise RuntimeError(
+                  f"Unexpected plugin {node_plugin['name']}, expected x-pack only"
+              )
         # check if license is the default one
         # also sleep for few more seconds, as the initial license generation might take some time
         time.sleep(5)
         conn.request('GET', '/_xpack', headers=headers)
         res = conn.getresponse()
-        if res.status == 200:
-          xpack = json.loads(res.read().decode("utf-8"))
-          if xpack['license']['type'] != 'trial':
-            raise RuntimeError('expected license type to be trial, was %s' % xpack['license']['type'])
-          if xpack['license']['mode'] != 'trial':
-            raise RuntimeError('expected license mode to be trial, was %s' % xpack['license']['mode'])
-          if xpack['license']['status'] != 'active':
-            raise RuntimeError('expected license status to be active, was %s' % xpack['license']['active'])
-        else:
-          raise RuntimeError('Expected HTTP 200 but got %s' % res.status)
-      
+        if res.status != 200:
+          raise RuntimeError(f'Expected HTTP 200 but got {res.status}')
+
+        xpack = json.loads(res.read().decode("utf-8"))
+        if xpack['license']['type'] != 'trial':
+          raise RuntimeError(
+              f"expected license type to be trial, was {xpack['license']['type']}"
+          )
+        if xpack['license']['mode'] != 'trial':
+          raise RuntimeError(
+              f"expected license mode to be trial, was {xpack['license']['mode']}"
+          )
+        if xpack['license']['status'] != 'active':
+          raise RuntimeError(
+              f"expected license status to be active, was {xpack['license']['active']}"
+          )
       finally:
         conn.close()
     finally:
@@ -172,9 +182,9 @@ def run(command, env_vars=None):
   if env_vars:
     for key, value in env_vars.items():
       os.putenv(key, value)
-  print('*** Running: %s%s%s' % (COLOR_OK, command, COLOR_END))
+  print(f'*** Running: {COLOR_OK}{command}{COLOR_END}')
   if os.system(command):
-    raise RuntimeError('    FAILED: %s' % (command))
+    raise RuntimeError(f'    FAILED: {command}')
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser(description='SmokeTests a Release Candidate from S3 staging repo')
@@ -192,9 +202,9 @@ if __name__ == "__main__":
   hash = args.hash
   url = args.url
   verify_java_version('1.8')
-  if url:
-    download_url = url
-  else:
-    download_url = 'https://staging.elastic.co/%s-%s/downloads/elasticsearch/elasticsearch-%s.zip' % (version, hash, version)
+  download_url = (
+      url or
+      f'https://staging.elastic.co/{version}-{hash}/downloads/elasticsearch/elasticsearch-{version}.zip'
+  )
   download_release(version, hash, download_url)
 
